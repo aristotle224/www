@@ -46,14 +46,7 @@ const cache = new Map<string, CacheEntry>();
 let requestId = 0;
 
 export type StellarRpcErrorKind =
-  | 'network'
-  | 'http'
-  | 'rate-limit'
-  | 'rpc'
-  | 'retention'
-  | 'malformed'
-  | 'timeout'
-  | 'aborted';
+  'network' | 'http' | 'rate-limit' | 'rpc' | 'retention' | 'malformed' | 'timeout' | 'aborted';
 
 export class StellarRpcError extends Error {
   readonly kind: StellarRpcErrorKind;

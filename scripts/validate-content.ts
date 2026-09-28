@@ -67,11 +67,24 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** Accepts both ISO datetime (2026-06-15T…) and bare date (2026-06-15). */
+/**
+ * Strict ISO 8601 date check.
+ *
+ * Accepts:
+ *   • Bare date:          2026-06-15
+ *   • UTC datetime:       2026-06-15T14:22:00Z
+ *   • Datetime + ms:      2026-06-15T14:22:00.000Z
+ *   • Offset datetime:    2026-06-15T14:22:00+05:30
+ *
+ * Rejects anything new Date() would otherwise accept but is not a valid
+ * ISO 8601 string, e.g. "1", "August 14", "2026-1-5" (missing zero-pad).
+ */
+const ISO_DATE_RE =
+  /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?:T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d))?$/;
+
 function isIsoDate(v: unknown): boolean {
   if (!isString(v) || v.trim().length === 0) return false;
-  const d = new Date(v);
-  return !Number.isNaN(d.getTime());
+  return ISO_DATE_RE.test(v.trim());
 }
 
 function isUrl(v: unknown): boolean {
@@ -635,6 +648,379 @@ function validateBlogPosts(file: string): void {
 // vitalsData.ts and vitalsFixtures.ts are TypeScript modules whose shape is
 // enforced by the compiler; no separate JSON validation needed.
 
+// ── trust.json ─────────────────────────────────────────────────────────────
+
+function validateTrust(file: string): void {
+  const raw = loadJson(file);
+  if (!isObject(raw)) {
+    failures.push({ file: relPath(file), record: '<root>', message: 'must be an object' });
+    return;
+  }
+
+  // audits section
+  if ('audits' in raw) {
+    const audits = raw['audits'];
+    if (!isObject(audits)) {
+      failures.push({ file: relPath(file), record: 'audits', message: 'must be an object' });
+    } else {
+      requireNonEmpty({ file: relPath(file), record: 'audits' }, audits, 'eyebrow');
+      if (!isArray(audits['items'])) {
+        failures.push({
+          file: relPath(file),
+          record: 'audits',
+          message: 'field "items" must be an array',
+        });
+      } else {
+        (audits['items'] as unknown[]).forEach((item, i) => {
+          if (!isObject(item)) return;
+          const ctx: Ctx = { file: relPath(file), record: `audits.items[${i}]` };
+          requireNonEmpty(ctx, item, 'label');
+          requireNonEmpty(ctx, item, 'status');
+          requireNonEmpty(ctx, item, 'detail');
+          optionalUrl(ctx, item, 'link');
+        });
+      }
+    }
+  }
+
+  // integrations section
+  if ('integrations' in raw) {
+    const integ = raw['integrations'];
+    if (!isObject(integ)) {
+      failures.push({ file: relPath(file), record: 'integrations', message: 'must be an object' });
+    } else {
+      const ctx: Ctx = { file: relPath(file), record: 'integrations' };
+      requireNonEmpty(ctx, integ, 'eyebrow');
+      requireNumber(ctx, integ, 'count');
+      requireNonEmpty(ctx, integ, 'label');
+      optionalUrl(ctx, integ, 'link');
+    }
+  }
+
+  // uptime section
+  if ('uptime' in raw) {
+    const uptime = raw['uptime'];
+    if (!isObject(uptime)) {
+      failures.push({ file: relPath(file), record: 'uptime', message: 'must be an object' });
+    } else {
+      const ctx: Ctx = { file: relPath(file), record: 'uptime' };
+      requireNonEmpty(ctx, uptime, 'eyebrow');
+      requireNonEmpty(ctx, uptime, 'fallbackPercent');
+      requireNonEmpty(ctx, uptime, 'windowLabel');
+      requireUrl(ctx, uptime, 'statusPageUrl');
+    }
+  }
+}
+
+// ── showcase.json ──────────────────────────────────────────────────────────
+
+function validateShowcase(file: string): void {
+  const raw = loadJson(file);
+  if (!isObject(raw) || !isArray(raw['entries'])) {
+    failures.push({ file: relPath(file), record: '<root>', message: 'must be { entries: [] }' });
+    return;
+  }
+  const entries = raw['entries'] as unknown[];
+  entries.forEach((entry, i) => {
+    if (!isObject(entry)) {
+      failures.push({ file: relPath(file), record: `entries[${i}]`, message: 'must be an object' });
+      return;
+    }
+    const ctx: Ctx = { file: relPath(file), record: `entries[${i}] name="${entry['name']}"` };
+    requireNonEmpty(ctx, entry, 'name');
+    requireNonEmpty(ctx, entry, 'logo');
+    requireNonEmpty(ctx, entry, 'description');
+    requireUrl(ctx, entry, 'url');
+    requireBoolean(ctx, entry, 'stellar');
+  });
+}
+
+// ── incidents.json ─────────────────────────────────────────────────────────
+
+const INCIDENT_STATUSES = ['investigating', 'identified', 'monitoring', 'resolved'] as const;
+const INCIDENT_IMPACTS = ['none', 'minor', 'major', 'critical'] as const;
+
+function validateIncidents(file: string): void {
+  const raw = loadJson(file);
+  if (!isObject(raw) || !isArray(raw['incidents'])) {
+    failures.push({ file: relPath(file), record: '<root>', message: 'must be { incidents: [] }' });
+    return;
+  }
+  const incidents = raw['incidents'] as unknown[];
+  checkNoDuplicates(relPath(file), incidents as Record<string, unknown>[], 'id');
+
+  incidents.forEach((inc, i) => {
+    if (!isObject(inc)) {
+      failures.push({
+        file: relPath(file),
+        record: `incidents[${i}]`,
+        message: 'must be an object',
+      });
+      return;
+    }
+    const ctx: Ctx = { file: relPath(file), record: `incidents[${i}] id="${inc['id']}"` };
+    requireNonEmpty(ctx, inc, 'id');
+    requireNonEmpty(ctx, inc, 'title');
+    requireOneOf(ctx, inc, 'status', INCIDENT_STATUSES);
+    requireOneOf(ctx, inc, 'impact', INCIDENT_IMPACTS);
+    requireIsoDate(ctx, inc, 'date');
+    optionalIsoDate(ctx, inc, 'resolvedAt');
+
+    if (!isArray(inc['updates'])) {
+      fail(ctx, 'field "updates" must be an array');
+    } else {
+      (inc['updates'] as unknown[]).forEach((u, j) => {
+        if (!isObject(u)) return;
+        const uctx: Ctx = { file: relPath(file), record: `incidents[${i}].updates[${j}]` };
+        requireIsoDate(uctx, u, 'timestamp');
+        requireNonEmpty(uctx, u, 'message');
+      });
+    }
+  });
+}
+
+// ── security.json ──────────────────────────────────────────────────────────
+
+function validateSecurity(file: string): void {
+  const raw = loadJson(file);
+  if (!isObject(raw)) {
+    failures.push({ file: relPath(file), record: '<root>', message: 'must be an object' });
+    return;
+  }
+
+  // contact
+  if ('contact' in raw) {
+    const contact = raw['contact'];
+    if (!isObject(contact)) {
+      failures.push({ file: relPath(file), record: 'contact', message: 'must be an object' });
+    } else {
+      const ctx: Ctx = { file: relPath(file), record: 'contact' };
+      requireNonEmpty(ctx, contact, 'email');
+      optionalUrl(ctx, contact, 'acknowledgments');
+    }
+  }
+
+  // audits section
+  if ('audits' in raw) {
+    const audits = raw['audits'];
+    if (!isObject(audits)) {
+      failures.push({ file: relPath(file), record: 'audits', message: 'must be an object' });
+    } else {
+      const ctx: Ctx = { file: relPath(file), record: 'audits' };
+      optionalIsoDate(ctx, audits, 'lastCompleted');
+      optionalIsoDate(ctx, audits, 'nextScheduled');
+      optionalUrl(ctx, audits, 'reports');
+    }
+  }
+
+  // bounty section
+  if ('bounty' in raw) {
+    const bounty = raw['bounty'];
+    if (!isObject(bounty)) {
+      failures.push({ file: relPath(file), record: 'bounty', message: 'must be an object' });
+    } else {
+      const ctx: Ctx = { file: relPath(file), record: 'bounty' };
+      requireNonEmpty(ctx, bounty, 'status');
+      optionalUrl(ctx, bounty, 'url');
+    }
+  }
+
+  // disclosures section
+  if ('disclosures' in raw) {
+    const disclosures = raw['disclosures'];
+    if (!isObject(disclosures)) {
+      failures.push({ file: relPath(file), record: 'disclosures', message: 'must be an object' });
+    } else {
+      const ctx: Ctx = { file: relPath(file), record: 'disclosures' };
+      requireNumber(ctx, disclosures, 'count');
+      optionalUrl(ctx, disclosures, 'public');
+    }
+  }
+}
+
+// ── blog-manifest.json ─────────────────────────────────────────────────────
+
+function validateBlogManifest(file: string): void {
+  const raw = loadJson(file);
+  if (!isArray(raw)) {
+    failures.push({ file: relPath(file), record: '<root>', message: 'must be an array' });
+    return;
+  }
+  checkNoDuplicates(relPath(file), raw as Record<string, unknown>[], 'slug');
+
+  (raw as unknown[]).forEach((post, i) => {
+    if (!isObject(post)) {
+      failures.push({ file: relPath(file), record: `[${i}]`, message: 'must be an object' });
+      return;
+    }
+    const ctx: Ctx = { file: relPath(file), record: `manifest[${i}] slug="${post['slug']}"` };
+    requireNonEmpty(ctx, post, 'slug');
+    requireNonEmpty(ctx, post, 'title');
+    requireNonEmpty(ctx, post, 'excerpt');
+    requireIsoDate(ctx, post, 'date');
+    requireNonEmpty(ctx, post, 'author');
+    requireUrl(ctx, post, 'url');
+  });
+}
+
+// ── authors-optout.json ────────────────────────────────────────────────────
+
+function validateAuthorsOptout(file: string): void {
+  const raw = loadJson(file);
+  if (!isArray(raw)) {
+    failures.push({
+      file: relPath(file),
+      record: '<root>',
+      message: 'must be an array of strings',
+    });
+    return;
+  }
+  (raw as unknown[]).forEach((entry, i) => {
+    if (!isNonEmptyString(entry)) {
+      failures.push({
+        file: relPath(file),
+        record: `[${i}]`,
+        message: `must be a non-empty string (got ${JSON.stringify(entry)})`,
+      });
+    }
+  });
+}
+
+// ── contributors-optout.json ───────────────────────────────────────────────
+
+function validateContributorsOptout(file: string): void {
+  const raw = loadJson(file);
+  if (!isArray(raw)) {
+    failures.push({
+      file: relPath(file),
+      record: '<root>',
+      message: 'must be an array of strings',
+    });
+    return;
+  }
+  (raw as unknown[]).forEach((entry, i) => {
+    if (!isNonEmptyString(entry)) {
+      failures.push({
+        file: relPath(file),
+        record: `[${i}]`,
+        message: `must be a non-empty string (got ${JSON.stringify(entry)})`,
+      });
+    }
+  });
+}
+
+// ── team.json ──────────────────────────────────────────────────────────────
+
+function validateTeam(file: string): void {
+  const raw = loadJson(file);
+  if (!isObject(raw)) {
+    failures.push({ file: relPath(file), record: '<root>', message: 'must be an object' });
+    return;
+  }
+  requireNonEmpty({ file: relPath(file), record: '<root>' }, raw, 'mission');
+
+  const validatePerson = (ctx: Ctx, person: Record<string, unknown>): void => {
+    requireNonEmpty(ctx, person, 'name');
+    requireNonEmpty(ctx, person, 'role');
+    // bio optional for contributors
+    if ('bio' in person && person['bio'] != null && !isNonEmptyString(person['bio'])) {
+      fail(ctx, 'field "bio" must be a non-empty string when present');
+    }
+    optionalUrl(ctx, person, 'github');
+    optionalUrl(ctx, person, 'twitter');
+  };
+
+  for (const section of ['team', 'advisors', 'contributors'] as const) {
+    if (!(section in raw)) continue;
+    if (!isArray(raw[section])) {
+      failures.push({
+        file: relPath(file),
+        record: '<root>',
+        message: `field "${section}" must be an array`,
+      });
+      continue;
+    }
+    (raw[section] as unknown[]).forEach((person, i) => {
+      if (!isObject(person)) {
+        failures.push({
+          file: relPath(file),
+          record: `${section}[${i}]`,
+          message: 'must be an object',
+        });
+        return;
+      }
+      const ctx: Ctx = { file: relPath(file), record: `${section}[${i}] name="${person['name']}"` };
+      validatePerson(ctx, person);
+    });
+  }
+}
+
+// ── threat-model.json ──────────────────────────────────────────────────────
+
+function validateThreatModel(file: string): void {
+  const raw = loadJson(file);
+  if (!isObject(raw)) {
+    failures.push({ file: relPath(file), record: '<root>', message: 'must be an object' });
+    return;
+  }
+  const rootCtx: Ctx = { file: relPath(file), record: '<root>' };
+  requireNonEmpty(rootCtx, raw, 'title');
+  requireNonEmpty(rootCtx, raw, 'overview');
+
+  // schema block
+  if ('schema' in raw) {
+    const schema = raw['schema'];
+    if (!isObject(schema)) {
+      fail(rootCtx, 'field "schema" must be an object');
+    } else {
+      requireNonEmpty({ file: relPath(file), record: 'schema' }, schema, 'name');
+    }
+  }
+
+  // threatActors
+  if ('threatActors' in raw) {
+    if (!isArray(raw['threatActors'])) {
+      fail(rootCtx, 'field "threatActors" must be an array');
+    } else {
+      (raw['threatActors'] as unknown[]).forEach((actor, i) => {
+        if (!isObject(actor)) return;
+        const ctx: Ctx = { file: relPath(file), record: `threatActors[${i}]` };
+        requireNonEmpty(ctx, actor, 'key');
+        requireNonEmpty(ctx, actor, 'label');
+      });
+    }
+  }
+
+  // approaches
+  if (!isArray(raw['approaches'])) {
+    fail(rootCtx, 'field "approaches" must be an array');
+  } else {
+    (raw['approaches'] as unknown[]).forEach((approach, i) => {
+      if (!isObject(approach)) return;
+      const ctx: Ctx = { file: relPath(file), record: `approaches[${i}] key="${approach['key']}"` };
+      requireNonEmpty(ctx, approach, 'key');
+      requireNonEmpty(ctx, approach, 'label');
+      if ('cells' in approach && !isObject(approach['cells'])) {
+        fail(ctx, 'field "cells" must be an object');
+      }
+    });
+  }
+
+  // footnotes
+  if ('footnotes' in raw) {
+    if (!isArray(raw['footnotes'])) {
+      fail(rootCtx, 'field "footnotes" must be an array');
+    } else {
+      (raw['footnotes'] as unknown[]).forEach((fn, i) => {
+        if (!isObject(fn)) return;
+        const ctx: Ctx = { file: relPath(file), record: `footnotes[${i}]` };
+        requireNumber(ctx, fn, 'id');
+        requireNonEmpty(ctx, fn, 'text');
+      });
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // i18n shape validator
 // Checks that every non-English locale JSON has the same leaf-key structure
@@ -706,22 +1092,66 @@ function validateI18n(): void {
 // Runner
 // ---------------------------------------------------------------------------
 
-const VALIDATORS: Array<{ file: string; fn: (f: string) => void }> = [
-  { file: join(dataDir, 'case-studies.json'), fn: validateCaseStudies },
-  { file: join(dataDir, 'authors.json'), fn: validateAuthors },
-  { file: join(dataDir, 'contributors.json'), fn: validateContributors },
-  { file: join(dataDir, 'faq.json'), fn: validateFaq },
-  { file: join(dataDir, 'chains.json'), fn: validateChains },
-  { file: join(dataDir, 'wave.json'), fn: validateWave },
-  { file: join(dataDir, 'ecosystem.json'), fn: validateEcosystem },
-  { file: join(dataDir, 'roadmap.json'), fn: validateRoadmap },
-  { file: join(dataDir, 'blog-posts.json'), fn: validateBlogPosts },
-];
+// ---------------------------------------------------------------------------
+// Runner — dynamic file discovery
+//
+// Every *.json file in src/data/ must have a registered validator.
+// Adding a new collection without a schema causes an immediate build failure,
+// so new files can never silently bypass the gate.
+// ---------------------------------------------------------------------------
+
+/**
+ * Map from basename (e.g. "trust.json") to its validator function.
+ * Add a new entry here whenever a new *.json file is added to src/data/.
+ */
+const SCHEMA_MAP: Record<string, (f: string) => void> = {
+  'case-studies.json': validateCaseStudies,
+  'authors.json': validateAuthors,
+  'contributors.json': validateContributors,
+  'faq.json': validateFaq,
+  'chains.json': validateChains,
+  'wave.json': validateWave,
+  'ecosystem.json': validateEcosystem,
+  'roadmap.json': validateRoadmap,
+  'blog-posts.json': validateBlogPosts,
+  'trust.json': validateTrust,
+  'showcase.json': validateShowcase,
+  'incidents.json': validateIncidents,
+  'security.json': validateSecurity,
+  'blog-manifest.json': validateBlogManifest,
+  'authors-optout.json': validateAuthorsOptout,
+  'contributors-optout.json': validateContributorsOptout,
+  'team.json': validateTeam,
+  'threat-model.json': validateThreatModel,
+};
 
 console.log('\n🔍 Validating content collections…\n');
 
+// Discover every *.json file in src/data/ at runtime.
+const dataFiles = readdirSync(dataDir)
+  .filter((f) => f.endsWith('.json'))
+  .sort();
+
+// Fail loudly for any file with no registered schema so nothing sneaks through.
+const unregistered = dataFiles.filter((f) => !(f in SCHEMA_MAP));
+if (unregistered.length > 0) {
+  for (const f of unregistered) {
+    console.error(
+      `  ✗  src/data/${f} — no validator registered. Add one to SCHEMA_MAP in scripts/validate-content.ts.`,
+    );
+    failures.push({
+      file: `src/data/${f}`,
+      record: '<root>',
+      message: 'no validator registered in SCHEMA_MAP — add one to validate-content.ts',
+    });
+  }
+}
+
 let checked = 0;
-for (const { file, fn } of VALIDATORS) {
+for (const basename of dataFiles) {
+  const fn = SCHEMA_MAP[basename];
+  if (!fn) continue; // already reported above
+  const file = join(dataDir, basename);
   const before = failures.length;
   fn(file);
   const count = failures.length - before;
