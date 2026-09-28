@@ -46,7 +46,13 @@ export type AnalyticsEventName = keyof AnalyticsEventMap;
  * Used by `outbound_click`.
  */
 export type OutboundCategory =
-  'github' | 'docs' | 'social' | 'explorer' | 'ecosystem' | 'partner' | 'other';
+  | 'github'
+  | 'docs'
+  | 'social'
+  | 'explorer'
+  | 'ecosystem'
+  | 'partner'
+  | 'other';
 
 type AnalyticsProps = Record<string, string | number | boolean>;
 

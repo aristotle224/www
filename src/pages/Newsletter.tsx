@@ -7,7 +7,12 @@ import { track } from '../utils/track';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type FormState =
-  'idle' | 'submitting' | 'success' | 'error_invalid' | 'error_duplicate' | 'error_generic';
+  | 'idle'
+  | 'submitting'
+  | 'success'
+  | 'error_invalid'
+  | 'error_duplicate'
+  | 'error_generic';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
