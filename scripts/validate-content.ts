@@ -15,6 +15,7 @@
 import { readFileSync, readdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { isIsoDate } from '../src/utils/date.ts';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const root = join(__dirname, '..');
@@ -67,25 +68,7 @@ function isObject(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/**
- * Strict ISO 8601 date check.
- *
- * Accepts:
- *   • Bare date:          2026-06-15
- *   • UTC datetime:       2026-06-15T14:22:00Z
- *   • Datetime + ms:      2026-06-15T14:22:00.000Z
- *   • Offset datetime:    2026-06-15T14:22:00+05:30
- *
- * Rejects anything new Date() would otherwise accept but is not a valid
- * ISO 8601 string, e.g. "1", "August 14", "2026-1-5" (missing zero-pad).
- */
-const ISO_DATE_RE =
-  /^\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01])(?:T(?:[01]\d|2[0-3]):[0-5]\d:[0-5]\d(?:\.\d+)?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d))?$/;
-
-function isIsoDate(v: unknown): boolean {
-  if (!isString(v) || v.trim().length === 0) return false;
-  return ISO_DATE_RE.test(v.trim());
-}
+// isIsoDate is imported from ../src/utils/date.ts
 
 function isUrl(v: unknown): boolean {
   if (!isString(v) || v.trim().length === 0) return false;
